@@ -50,6 +50,9 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
     
+    // Material Icons Extended - provides additional icon sets
+    implementation("androidx.compose.material:material-icons-extended")
+    
     // WorkManager
     implementation("androidx.work:work-runtime-ktx:2.9.0")
     

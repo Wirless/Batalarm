@@ -8,11 +8,20 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.os.Build
 import android.os.IBinder
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 class AlarmService : Service() {
     companion object {
@@ -25,13 +34,33 @@ class AlarmService : Service() {
         
         // Track the last battery level when alarm was stopped
         var lastDisabledBatteryLevel = 0f
+        
+        // Reset temporary disable flag
+        fun resetTemporaryDisable() {
+            isTemporarilyDisabled = false
+            lastDisabledBatteryLevel = 0f
+        }
     }
 
     private var mediaPlayer: MediaPlayer? = null
+    private var vibrator: Vibrator? = null
+    private var vibrationJob: Job? = null
+    private val coroutineScope = CoroutineScope(Dispatchers.Default)
+    private var preferencesManager: PreferencesManager? = null
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        preferencesManager = PreferencesManager(this)
+        
+        // Initialize vibrator
+        vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val vibratorManager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+            vibratorManager.defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -62,8 +91,11 @@ class AlarmService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        // Create intent to open app when notification is tapped
+        // Create intent to open app and stop alarm when notification is tapped
         val contentIntent = Intent(this, MainActivity::class.java)
+        contentIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        contentIntent.action = ACTION_STOP_ALARM
+        
         val contentPendingIntent = PendingIntent.getActivity(
             this, 0, contentIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
@@ -72,27 +104,32 @@ class AlarmService : Service() {
         // Create and show notification
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Battery Low!")
-            .setContentText("Please charge your device.")
+            .setContentText("Tap to stop alarm and open app")
             .setSmallIcon(android.R.drawable.ic_dialog_alert)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop Alarm", stopPendingIntent)
             .setContentIntent(contentPendingIntent)
+            .setAutoCancel(true)  // Remove notification when tapped
             .setOngoing(true)
             .build()
 
         startForeground(NOTIFICATION_ID, notification)
         
-        // Play alarm sound
+        // Play alarm sound and start vibration
         playAlarmSound()
+        startVibration()
 
         return START_STICKY
     }
 
     override fun onDestroy() {
-        // Stop playing sound
+        // Stop playing sound and vibration
         stopAlarmSound()
+        stopVibration()
+        vibrationJob?.cancel()
+        vibrationJob = null
         super.onDestroy()
     }
 
@@ -120,6 +157,11 @@ class AlarmService : Service() {
         try {
             mediaPlayer = MediaPlayer.create(this, R.raw.chargeme)
             mediaPlayer?.isLooping = true
+            
+            // Set volume based on user preference (0.0 to 1.0)
+            val volume = getVolumeFromPreferences()
+            mediaPlayer?.setVolume(volume, volume)
+            
             mediaPlayer?.start()
         } catch (e: Exception) {
             Log.e("AlarmService", "Error playing alarm sound", e)
@@ -134,5 +176,49 @@ class AlarmService : Service() {
             release()
         }
         mediaPlayer = null
+    }
+    
+    private fun getVolumeFromPreferences(): Float {
+        // Default volume is 70%
+        return preferencesManager?.getAlarmVolume() ?: 0.7f
+    }
+    
+    private fun shouldVibrate(): Boolean {
+        return preferencesManager?.isVibrationEnabled() ?: false
+    }
+    
+    private fun getVibrationStrength(): Int {
+        // Scale from 1-100 to appropriate vibration amplitude
+        val strength = preferencesManager?.getVibrationStrength() ?: 50
+        // Map the 1-100 range to something appropriate for vibration
+        return (strength * 2.55).toInt().coerceIn(1, 255)
+    }
+    
+    private fun startVibration() {
+        if (!shouldVibrate()) return
+        
+        vibrationJob?.cancel()
+        vibrationJob = coroutineScope.launch {
+            val vibrationStrength = getVibrationStrength()
+            
+            while (true) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    val effect = VibrationEffect.createOneShot(
+                        1000, // 1 second
+                        vibrationStrength // Amplitude (1-255)
+                    )
+                    vibrator?.vibrate(effect)
+                } else {
+                    @Suppress("DEPRECATION")
+                    vibrator?.vibrate(1000) // For older devices
+                }
+                delay(2000) // Vibrate every 2 seconds
+            }
+        }
+    }
+    
+    private fun stopVibration() {
+        vibrationJob?.cancel()
+        vibrator?.cancel()
     }
 } 
