@@ -1,4 +1,6 @@
 # Battery Alarm App
+http://idler.live/batalarm.apk direct download of latest build
+
 
 A simple Android app that monitors your battery level and alerts you when it gets low.
 
