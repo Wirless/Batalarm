@@ -7,6 +7,8 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    
 
     <application
         android:name=".BatteryAlarmApplication"
@@ -31,9 +33,16 @@
             </intent-filter>
         </activity>
 
-        <!-- Declare our AlarmService -->
+        <!-- Alarm Service for playing sound when battery is low -->
         <service
             android:name=".AlarmService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="specialUse" />
+            
+        <!-- Persistent Battery Monitor Service -->
+        <service
+            android:name=".BatteryMonitorService"
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="specialUse" />

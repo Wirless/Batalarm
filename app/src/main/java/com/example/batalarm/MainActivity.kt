@@ -2,6 +2,7 @@ package com.example.batalarm
 
 import android.Manifest
 import android.app.ActivityManager
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -34,9 +35,9 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -56,17 +57,35 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
+import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import com.example.batalarm.ui.theme.BatalarmTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.text.DecimalFormat
+import androidx.compose.material3.HorizontalDivider
 
 class MainActivity : ComponentActivity() {
     private lateinit var preferencesManager: PreferencesManager
     private var isAlarmServiceRunning = false
+    
+    // Broadcast receiver to sync with alarm state
+    private val alarmStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                AlarmService.ACTION_ALARM_STARTED -> {
+                    isAlarmServiceRunning = true
+                }
+                AlarmService.ACTION_ALARM_STOPPED -> {
+                    isAlarmServiceRunning = false
+                }
+            }
+        }
+    }
 
     // Request post notifications permission
     private val requestPermissionLauncher = registerForActivityResult(
@@ -90,10 +109,36 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             requestPermissionLauncher.launch(Manifest.permission.VIBRATE)
         }
+        
+        // Register for alarm state broadcasts
+        LocalBroadcastManager.getInstance(this).registerReceiver(
+            alarmStateReceiver,
+            IntentFilter().apply {
+                addAction(AlarmService.ACTION_ALARM_STARTED)
+                addAction(AlarmService.ACTION_ALARM_STOPPED)
+            }
+        )
 
         // Handle stop alarm action from notification
         if (intent?.action == AlarmService.ACTION_STOP_ALARM) {
             stopAlarmService()
+        }
+        
+        // Check if foreground service should be started
+        lifecycleScope.launch {
+            if (preferencesManager.foregroundServiceEnabledFlow.first()) {
+                val isForegroundServiceRunning = isBatteryMonitorServiceRunning()
+                
+                if (!isForegroundServiceRunning) {
+                    // Start the persistent foreground service if it should be running but isn't
+                    val intent = Intent(this@MainActivity, BatteryMonitorService::class.java)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        startForegroundService(intent)
+                    } else {
+                        startService(intent)
+                    }
+                }
+            }
         }
 
         // Check if alarm service is running
@@ -122,6 +167,12 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+    }
+    
+    override fun onDestroy() {
+        // Unregister the receiver
+        LocalBroadcastManager.getInstance(this).unregisterReceiver(alarmStateReceiver)
+        super.onDestroy()
     }
 
     private fun getCurrentBatteryState(): BatteryState {
@@ -160,6 +211,24 @@ class MainActivity : ComponentActivity() {
             return false
         }
     }
+    
+    private fun isBatteryMonitorServiceRunning(): Boolean {
+        // Modern alternative to check if service is running
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            return (applicationContext as? BatteryAlarmApplication)?.isServiceRunning(BatteryMonitorService::class.java) == true
+        } else {
+            // For older versions, use deprecated method
+            @Suppress("DEPRECATION")
+            val manager = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
+            @Suppress("DEPRECATION")
+            for (service in manager.getRunningServices(Integer.MAX_VALUE)) {
+                if (BatteryMonitorService::class.java.name == service.service.className) {
+                    return true
+                }
+            }
+            return false
+        }
+    }
 
     private fun stopAlarmService() {
         val intent = Intent(this, AlarmService::class.java)
@@ -177,6 +246,9 @@ fun BatteryAlarmApp(
     onStopAlarm: () -> Unit,
     onToggleMonitoring: (Boolean) -> Unit
 ) {
+    // Get the current context
+    val context = LocalContext.current
+    
     // Collect preferences
     val monitoringEnabled by preferencesManager.monitoringEnabledFlow.collectAsState(initial = false)
     val alarmEnabled by preferencesManager.alarmEnabledFlow.collectAsState(initial = true)
@@ -184,6 +256,7 @@ fun BatteryAlarmApp(
     val alarmVolume by preferencesManager.alarmVolumeFlow.collectAsState(initial = PreferencesManager.DEFAULT_ALARM_VOLUME)
     val vibrationEnabled by preferencesManager.vibrationEnabledFlow.collectAsState(initial = PreferencesManager.DEFAULT_VIBRATION_ENABLED)
     val vibrationStrength by preferencesManager.vibrationStrengthFlow.collectAsState(initial = PreferencesManager.DEFAULT_VIBRATION_STRENGTH)
+    val foregroundServiceEnabled by preferencesManager.foregroundServiceEnabledFlow.collectAsState(initial = false)
     
     // Get battery state
     var batteryState by remember { mutableStateOf(BatteryState(0f, false)) }
@@ -312,6 +385,42 @@ fun BatteryAlarmApp(
                     
                     Spacer(modifier = Modifier.height(8.dp))
                     
+                    // Run in background (persistent service)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Run in Background (Persistent)",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Switch(
+                            checked = foregroundServiceEnabled,
+                            onCheckedChange = { checked ->
+                                coroutineScope.launch {
+                                    preferencesManager.updateForegroundServiceEnabled(checked)
+                                    if (checked) {
+                                        // Start the persistent foreground service
+                                        val intent = Intent(context, BatteryMonitorService::class.java)
+                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                            context.startForegroundService(intent)
+                                        } else {
+                                            context.startService(intent)
+                                        }
+                                    } else {
+                                        // Stop the persistent foreground service
+                                        val intent = Intent(context, BatteryMonitorService::class.java)
+                                        intent.action = BatteryMonitorService.ACTION_STOP_MONITOR
+                                        context.startService(intent)
+                                    }
+                                }
+                            }
+                        )
+                    }
+                    
+                    Spacer(modifier = Modifier.height(16.dp))
+                    
                     // Enable alarm
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -403,7 +512,7 @@ fun BatteryAlarmApp(
                         )
                     }
                     
-                    Text(
+    Text(
                         text = "Alarm Volume: ${(volumeSliderPosition * 100).toInt()}%",
                         style = MaterialTheme.typography.bodyMedium
                     )

@@ -26,12 +26,14 @@ class PreferencesManager(private val context: Context) {
         private val ALARM_VOLUME = floatPreferencesKey("alarm_volume")
         private val VIBRATION_ENABLED = booleanPreferencesKey("vibration_enabled")
         private val VIBRATION_STRENGTH = intPreferencesKey("vibration_strength")
+        private val FOREGROUND_SERVICE_ENABLED = booleanPreferencesKey("foreground_service_enabled")
         
         // Default values
         const val DEFAULT_BATTERY_THRESHOLD = 15
         const val DEFAULT_ALARM_VOLUME = 0.7f // 70%
         const val DEFAULT_VIBRATION_ENABLED = false
         const val DEFAULT_VIBRATION_STRENGTH = 50 // 50% strength
+        const val DEFAULT_FOREGROUND_SERVICE_ENABLED = false
     }
 
     // Get background monitoring enabled preference
@@ -68,6 +70,12 @@ class PreferencesManager(private val context: Context) {
     val vibrationStrengthFlow: Flow<Int> = context.dataStore.data
         .map { preferences ->
             preferences[VIBRATION_STRENGTH] ?: DEFAULT_VIBRATION_STRENGTH
+        }
+        
+    // Get foreground service enabled preference
+    val foregroundServiceEnabledFlow: Flow<Boolean> = context.dataStore.data
+        .map { preferences ->
+            preferences[FOREGROUND_SERVICE_ENABLED] ?: DEFAULT_FOREGROUND_SERVICE_ENABLED
         }
 
     // Update background monitoring enabled preference
@@ -122,7 +130,14 @@ class PreferencesManager(private val context: Context) {
         }
     }
     
-    // Synchronous methods for AlarmService to use
+    // Update foreground service enabled preference
+    suspend fun updateForegroundServiceEnabled(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[FOREGROUND_SERVICE_ENABLED] = enabled
+        }
+    }
+    
+    // Synchronous methods for services to use
     fun getAlarmVolume(): Float = runBlocking {
         alarmVolumeFlow.firstOrNull() ?: DEFAULT_ALARM_VOLUME
     }
@@ -133,5 +148,21 @@ class PreferencesManager(private val context: Context) {
     
     fun getVibrationStrength(): Int = runBlocking {
         vibrationStrengthFlow.firstOrNull() ?: DEFAULT_VIBRATION_STRENGTH
+    }
+    
+    fun isAlarmEnabled(): Boolean = runBlocking {
+        alarmEnabledFlow.firstOrNull() ?: true
+    }
+    
+    fun getBatteryThreshold(): Int = runBlocking {
+        batteryThresholdFlow.firstOrNull() ?: DEFAULT_BATTERY_THRESHOLD
+    }
+    
+    fun isMonitoringEnabled(): Boolean = runBlocking {
+        monitoringEnabledFlow.firstOrNull() ?: false
+    }
+    
+    fun isForegroundServiceEnabled(): Boolean = runBlocking {
+        foregroundServiceEnabledFlow.firstOrNull() ?: DEFAULT_FOREGROUND_SERVICE_ENABLED
     }
 } 

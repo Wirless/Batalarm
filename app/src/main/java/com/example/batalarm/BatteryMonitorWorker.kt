@@ -24,10 +24,17 @@ class BatteryMonitorWorker(appContext: Context, workerParams: WorkerParameters) 
         val isMonitoringEnabled = preferencesManager.monitoringEnabledFlow.first()
         val isAlarmEnabled = preferencesManager.alarmEnabledFlow.first()
         val alarmPercentage = preferencesManager.batteryThresholdFlow.first()
+        val isForegroundServiceEnabled = preferencesManager.foregroundServiceEnabledFlow.first()
 
         // If monitoring is disabled, don't continue
         if (!isMonitoringEnabled) {
             Log.d("BatteryMonitorWorker", "Battery monitoring disabled")
+            return Result.success()
+        }
+        
+        // If foreground service is enabled, don't duplicate the monitoring work
+        if (isForegroundServiceEnabled && isBatteryMonitorServiceRunning()) {
+            Log.d("BatteryMonitorWorker", "Foreground service is handling monitoring")
             return Result.success()
         }
 
@@ -80,8 +87,8 @@ class BatteryMonitorWorker(appContext: Context, workerParams: WorkerParameters) 
             1L // Check every minute when low or alarming
         }
 
-        // Only reschedule if monitoring is still enabled
-        if (isMonitoringEnabled) {
+        // Only reschedule if monitoring is still enabled and foreground service isn't handling it
+        if (isMonitoringEnabled && !(isForegroundServiceEnabled && isBatteryMonitorServiceRunning())) {
             val workRequest = OneTimeWorkRequestBuilder<BatteryMonitorWorker>()
                 .setInitialDelay(nextIntervalMinutes, TimeUnit.MINUTES)
                 .build()
@@ -117,8 +124,21 @@ class BatteryMonitorWorker(appContext: Context, workerParams: WorkerParameters) 
     // Helper to check if service is running
     private fun isAlarmServiceRunning(): Boolean {
         val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        @Suppress("DEPRECATION")
         for (service in manager.getRunningServices(Integer.MAX_VALUE)) {
             if (AlarmService::class.java.name == service.service.className) {
+                return true
+            }
+        }
+        return false
+    }
+    
+    // Helper to check if battery monitor service is running
+    private fun isBatteryMonitorServiceRunning(): Boolean {
+        val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        @Suppress("DEPRECATION")
+        for (service in manager.getRunningServices(Integer.MAX_VALUE)) {
+            if (BatteryMonitorService::class.java.name == service.service.className) {
                 return true
             }
         }

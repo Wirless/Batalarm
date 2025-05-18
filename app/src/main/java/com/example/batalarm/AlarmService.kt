@@ -17,6 +17,7 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -28,6 +29,10 @@ class AlarmService : Service() {
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "battery_alarm_channel"
         const val ACTION_STOP_ALARM = "com.example.batalarm.STOP_ALARM"
+        
+        // Broadcast actions for syncing with UI
+        const val ACTION_ALARM_STARTED = "com.example.batalarm.ALARM_STARTED"
+        const val ACTION_ALARM_STOPPED = "com.example.batalarm.ALARM_STOPPED"
         
         // Flag to track if alarm is temporarily disabled
         var isTemporarilyDisabled = false
@@ -120,6 +125,9 @@ class AlarmService : Service() {
         // Play alarm sound and start vibration
         playAlarmSound()
         startVibration()
+        
+        // Broadcast that alarm has started (for UI sync)
+        sendAlarmStateBroadcast(true)
 
         return START_STICKY
     }
@@ -130,6 +138,10 @@ class AlarmService : Service() {
         stopVibration()
         vibrationJob?.cancel()
         vibrationJob = null
+        
+        // Broadcast that alarm has stopped (for UI sync)
+        sendAlarmStateBroadcast(false)
+        
         super.onDestroy()
     }
 
@@ -220,5 +232,10 @@ class AlarmService : Service() {
     private fun stopVibration() {
         vibrationJob?.cancel()
         vibrator?.cancel()
+    }
+    
+    private fun sendAlarmStateBroadcast(isPlaying: Boolean) {
+        val intent = Intent(if (isPlaying) ACTION_ALARM_STARTED else ACTION_ALARM_STOPPED)
+        LocalBroadcastManager.getInstance(this).sendBroadcast(intent)
     }
 } 
